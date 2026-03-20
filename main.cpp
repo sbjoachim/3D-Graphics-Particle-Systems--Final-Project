@@ -9,12 +9,26 @@ Description:
 	  - Shader loading and uniform helper functions
 	  - Main render loop with delta time
 
+	Particle system features:
+	  - Fire effect: upward-rising glowing particles with turbulence
+	  - Smoke effect: slow-rising, expanding gray particles
+	  - Fireworks effect: rocket launch with spherical burst explosion
+	  - Ground plane with distance-based fade
+
 	Controls:
 	  Camera:
 	    UP/DOWN arrows    - Pitch (rotate around x-axis)
 	    LEFT/RIGHT arrows - Yaw (rotate around y-axis)
 	    A/D               - Roll (rotate around z-axis)
 	    W/S               - Move forward/backward along look-at vector
+
+	  Particle System:
+	    1 - Switch to Fire effect
+	    2 - Switch to Smoke effect
+	    3 - Switch to Fireworks effect
+	    F - Launch a firework (in fireworks mode)
+	    +/= - Increase emission rate
+	    -   - Decrease emission rate
 
 	  Q - Quit the program
 
@@ -36,6 +50,7 @@ Author: Joachim Brian - 0686270
 #include <glm/gtc/matrix_transform.hpp>
 
 #include <camera.h>
+#include <particle.h>
 
 #include <fstream>
 #include <sstream>
@@ -73,6 +88,11 @@ glm::mat4 view_matrix, projection_matrix;
 // ================================================================
 GLFWwindow* window;
 Camera* camera;
+
+// ================================================================
+// Particle system (global so KeyCallback can access it)
+// ================================================================
+ParticleSystem* particleSystem;
 
 // ================================================================
 // Vertex structure
@@ -240,8 +260,47 @@ void KeyCallback(GLFWwindow* window, int key, int scancode, int action, int mods
 	if (key == GLFW_KEY_W) camera->MoveForward(trans_factor);
 	if (key == GLFW_KEY_S) camera->MoveBackward(trans_factor);
 
-	// TODO: Add particle system controls here
-	// e.g., 1/2/3 to switch effects, +/- for emission rate, etc.
+	// ---- Particle system controls ----
+
+	// Press 1 to switch to Fire effect
+	if (key == GLFW_KEY_1 && action == GLFW_PRESS) {
+		particleSystem->SetEffect(EFFECT_FIRE);
+		std::cout << "Effect: Fire (emission rate: " << particleSystem->GetEmissionRate() << ")" << std::endl;
+	}
+
+	// Press 2 to switch to Smoke effect
+	if (key == GLFW_KEY_2 && action == GLFW_PRESS) {
+		particleSystem->SetEffect(EFFECT_SMOKE);
+		std::cout << "Effect: Smoke (emission rate: " << particleSystem->GetEmissionRate() << ")" << std::endl;
+	}
+
+	// Press 3 to switch to Fireworks effect
+	if (key == GLFW_KEY_3 && action == GLFW_PRESS) {
+		particleSystem->SetEffect(EFFECT_FIREWORKS);
+		std::cout << "Effect: Fireworks" << std::endl;
+	}
+
+	// Press F to manually launch a firework (only in fireworks mode)
+	if (key == GLFW_KEY_F && action == GLFW_PRESS) {
+		if (particleSystem->GetEffect() == EFFECT_FIREWORKS) {
+			particleSystem->TriggerFirework();
+			std::cout << "Firework launched!" << std::endl;
+		}
+	}
+
+	// Press +/= to increase emission rate (for fire/smoke)
+	if (key == GLFW_KEY_EQUAL) {
+		float rate = particleSystem->GetEmissionRate() + 20.0f;
+		particleSystem->SetEmissionRate(rate);
+		std::cout << "Emission rate: " << particleSystem->GetEmissionRate() << std::endl;
+	}
+
+	// Press - to decrease emission rate (for fire/smoke)
+	if (key == GLFW_KEY_MINUS) {
+		float rate = particleSystem->GetEmissionRate() - 20.0f;
+		particleSystem->SetEmissionRate(rate);
+		std::cout << "Emission rate: " << particleSystem->GetEmissionRate() << std::endl;
+	}
 }
 
 
@@ -256,6 +315,101 @@ void ResizeCallback(GLFWwindow* window, int width, int height) {
 	float top = tan((camera_fov_g / 2.0f) * (glm::pi<float>() / 180.0f)) * camera_near_clip_distance_g;
 	float right = top * width / height;
 	(*projection_matrix) = glm::frustum(-right, right, -top, top, camera_near_clip_distance_g, camera_far_clip_distance_g);
+}
+
+
+// ================================================================
+// CreateGroundPlane: Builds a flat grid to serve as the ground
+// ================================================================
+// The ground is a grid of triangles centered at the origin.
+// It gives the scene a sense of space and orientation.
+// Each vertex has a dark color that fades at the edges (handled by shader).
+Geometry CreateGroundPlane(float size, int divisions) {
+
+	Geometry ground;
+	std::vector<Vertex> vertices;
+	std::vector<GLuint> indices;
+
+	// Step size: how far apart each grid line is
+	float step = (2.0f * size) / (float)divisions;
+
+	// Create grid vertices
+	// We loop through rows (z) and columns (x) to make a flat plane at y=0
+	for (int z = 0; z <= divisions; z++) {
+		for (int x = 0; x <= divisions; x++) {
+			Vertex v;
+			// Position: centered at origin, stretching from -size to +size
+			v.pos = glm::vec3(
+				-size + x * step,  // x coordinate
+				0.0f,              // y = 0 (flat on the ground)
+				-size + z * step   // z coordinate
+			);
+			// Dark ground color with subtle variation
+			float shade = 0.05f + 0.03f * ((x + z) % 2); // checkerboard-like subtle pattern
+			v.color = glm::vec3(shade, shade + 0.02f, shade + 0.04f);
+			// Normal points straight up
+			v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
+			vertices.push_back(v);
+		}
+	}
+
+	// Create triangle indices
+	// Each grid cell is made of 2 triangles (6 indices per cell)
+	for (int z = 0; z < divisions; z++) {
+		for (int x = 0; x < divisions; x++) {
+			int topLeft     = z * (divisions + 1) + x;
+			int topRight    = topLeft + 1;
+			int bottomLeft  = (z + 1) * (divisions + 1) + x;
+			int bottomRight = bottomLeft + 1;
+
+			// First triangle (top-left, bottom-left, top-right)
+			indices.push_back(topLeft);
+			indices.push_back(bottomLeft);
+			indices.push_back(topRight);
+
+			// Second triangle (top-right, bottom-left, bottom-right)
+			indices.push_back(topRight);
+			indices.push_back(bottomLeft);
+			indices.push_back(bottomRight);
+		}
+	}
+
+	// Upload to GPU using OpenGL buffer objects
+	// VAO = Vertex Array Object (stores the vertex format configuration)
+	// VBO = Vertex Buffer Object (stores actual vertex data)
+	// IBO = Index Buffer Object (stores which vertices form each triangle)
+	glGenVertexArrays(1, &ground.vao);
+	glBindVertexArray(ground.vao);
+
+	glGenBuffers(1, &ground.vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, ground.vbo);
+	glBufferData(GL_ARRAY_BUFFER, vertices.size() * sizeof(Vertex), vertices.data(), GL_STATIC_DRAW);
+
+	glGenBuffers(1, &ground.ibo);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, ground.ibo);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices.size() * sizeof(GLuint), indices.data(), GL_STATIC_DRAW);
+
+	// Tell OpenGL how to read the vertex data:
+	// Attribute 0 = position (3 floats, starting at offset 0 in each Vertex)
+	GLint posAttrib = 0;
+	glEnableVertexAttribArray(posAttrib);
+	glVertexAttribPointer(posAttrib, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, pos));
+
+	// Attribute 1 = color (3 floats, starting at offset of 'color' in each Vertex)
+	GLint colAttrib = 1;
+	glEnableVertexAttribArray(colAttrib);
+	glVertexAttribPointer(colAttrib, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, color));
+
+	// Attribute 2 = normal (3 floats, starting at offset of 'normal' in each Vertex)
+	GLint normAttrib = 2;
+	glEnableVertexAttribArray(normAttrib);
+	glVertexAttribPointer(normAttrib, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal));
+
+	// Store the number of indices so we know how many to draw later
+	ground.size = static_cast<GLuint>(indices.size());
+
+	glBindVertexArray(0);
+	return ground;
 }
 
 
@@ -313,9 +467,23 @@ int main(void) {
 		// ----------------------------------------
 		// Load shaders
 		// ----------------------------------------
-		// TODO: Load particle shaders, ground shader, etc.
-		// GLuint particleShader = LoadShaders("particle");
-		// GLuint groundShader = LoadShaders("ground");
+		// Load the particle shader (used for rendering point-sprite particles)
+		GLuint particleShader = LoadShaders("particle");
+
+		// Load the ground shader (used for the ground plane with distance fade)
+		GLuint groundShader = LoadShaders("ground");
+
+		// ----------------------------------------
+		// Create ground plane geometry
+		// ----------------------------------------
+		// A 100x100 unit grid with 40 subdivisions, centered at the origin
+		Geometry groundPlane = CreateGroundPlane(50.0f, 40);
+
+		// ----------------------------------------
+		// Create particle system
+		// ----------------------------------------
+		// Start with Fire effect, emitter at world origin, up to 5000 particles
+		particleSystem = new ParticleSystem(EFFECT_FIRE, glm::vec3(0.0f, 0.0f, 0.0f), 5000);
 
 		// ----------------------------------------
 		// Set up callbacks
@@ -328,6 +496,8 @@ int main(void) {
 
 		std::cout << "\n=== COSC 3307 Final Project: Particle Systems ===" << std::endl;
 		std::cout << "Camera: Arrow keys (pitch/yaw), A/D (roll), W/S (forward/backward)" << std::endl;
+		std::cout << "Effects: 1 = Fire, 2 = Smoke, 3 = Fireworks" << std::endl;
+		std::cout << "Controls: +/- = emission rate, F = launch firework" << std::endl;
 		std::cout << "Q: Quit" << std::endl;
 		std::cout << "=================================================\n" << std::endl;
 
@@ -355,15 +525,59 @@ int main(void) {
 			view_matrix = camera->GetViewMatrix(NULL);
 			projection_matrix = camera->GetProjectionMatrix(NULL);
 
-			// TODO: Update and render particle systems here
-			// 1. Update particles (physics, lifecycle, spawn/destroy)
-			// 2. Render ground plane
-			// 3. Render particles (with blending)
+			// ============================================================
+			// STEP 1: Update particle system (physics, lifecycle, spawn)
+			// ============================================================
+			// This advances all particle positions, spawns new ones,
+			// and removes dead ones based on elapsed time (delta_time)
+			particleSystem->Update(delta_time);
+
+			// ============================================================
+			// STEP 2: Render the ground plane
+			// ============================================================
+			// The ground gives the scene a sense of space and orientation.
+			// We use the ground shader which has a distance-based fade effect.
+			{
+				glUseProgram(groundShader);
+
+				// Send the camera matrices to the ground shader
+				// These transform vertices from world space -> screen space
+				LoadShaderMatrix(groundShader, view_matrix, "view_mat");
+				LoadShaderMatrix(groundShader, projection_matrix, "projection_mat");
+
+				// The ground sits at the origin with no extra transformation
+				glm::mat4 world_mat = glm::mat4(1.0f); // identity matrix = no transformation
+				LoadShaderMatrix(groundShader, world_mat, "world_mat");
+
+				// Enable alpha blending so the ground edges can fade out
+				glEnable(GL_BLEND);
+				glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+
+				// Draw the ground plane triangles
+				glBindVertexArray(groundPlane.vao);
+				glDrawElements(GL_TRIANGLES, groundPlane.size, GL_UNSIGNED_INT, 0);
+				glBindVertexArray(0);
+
+				glDisable(GL_BLEND);
+			}
+
+			// ============================================================
+			// STEP 3: Render particles (with additive blending for glow)
+			// ============================================================
+			// Particles are rendered AFTER the ground so they appear on top.
+			// The particle system handles all the blending setup internally.
+			particleSystem->Render(particleShader, view_matrix, projection_matrix);
 
 			// Swap buffers and poll events
 			glfwPollEvents();
 			glfwSwapBuffers(window);
 		}
+
+		// ----------------------------------------
+		// Cleanup: free allocated memory
+		// ----------------------------------------
+		delete particleSystem;
+		delete camera;
 	}
 	catch (std::exception &e) {
 		PrintException(e);

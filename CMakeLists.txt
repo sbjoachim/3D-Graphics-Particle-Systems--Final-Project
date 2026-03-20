@@ -11,16 +11,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(SOURCES
     main.cpp
     src/camera.cpp
+    src/particle.cpp
 )
 
 set(HEADERS
     include/camera.h
+    include/particle.h
 )
 
 # Shader files (not compiled, but added for IDE visibility)
 set(SHADERS
     resource/basic.vert
     resource/basic.frag
+    resource/particle.vert
+    resource/particle.frag
+    resource/ground.vert
+    resource/ground.frag
 )
 
 add_executable(${PROJECT_NAME}
