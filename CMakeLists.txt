@@ -21,8 +21,6 @@ set(HEADERS
 
 # Shader files (not compiled, but added for IDE visibility)
 set(SHADERS
-    resource/basic.vert
-    resource/basic.frag
     resource/particle.vert
     resource/particle.frag
     resource/ground.vert
@@ -55,7 +53,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL)
 # ---------------------------------------------------------
 
 # Path to your manually downloaded libraries
-set(LIBRARY_PATH "C:/Users/Brian Joachim/Desktop/T4/libraries")
+set(LIBRARY_PATH "C:/Users/Brian Joachim/Desktop/3D winter/T4/libraries")
 
 if(WIN32)
 

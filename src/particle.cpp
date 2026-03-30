@@ -42,8 +42,7 @@ Author: Joachim Brian - 0686270
 ParticleSystem::ParticleSystem(EffectType type, glm::vec3 emitterPos, int maxParticles)
 	: effectType_(type), emitterPos_(emitterPos), maxParticles_(maxParticles),
 	  emissionRate_(100.0f), emissionAccumulator_(0.0f),
-	  fireworkLaunched_(false), fireworkExploded_(false),
-	  fireworkTimer_(0.0f), vao_(0), vbo_(0)
+	  autoLaunchTimer_(0.0f), activeBurstCount_(0), vao_(0), vbo_(0)
 {
 	// Create the particle pool — all start as inactive
 	particles_.resize(maxParticles_);
@@ -166,7 +165,7 @@ void ParticleSystem::EmitFireParticle(Particle& p) {
 	p.alpha = 1.0f;                        // fully opaque when born
 	p.life = RandomFloat(0.5f, 1.5f);     // dies after 0.5-1.5 seconds
 	p.maxLife = p.life;                    // remember original lifespan for fade calculation
-	p.size = RandomFloat(8.0f, 20.0f);    // random point size
+	p.size = RandomFloat(12.0f, 28.0f);   // slightly larger for fuller flames
 	p.active = true;                       // mark as alive
 }
 
@@ -202,7 +201,7 @@ void ParticleSystem::EmitSmokeParticle(Particle& p) {
 	p.alpha = 0.6f;                        // semi-transparent from the start
 	p.life = RandomFloat(2.0f, 4.0f);     // smoke lingers longer than fire
 	p.maxLife = p.life;
-	p.size = RandomFloat(15.0f, 35.0f);   // smoke puffs are larger than fire particles
+	p.size = RandomFloat(20.0f, 45.0f);   // denser, larger smoke puffs
 	p.active = true;
 }
 
@@ -223,26 +222,34 @@ void ParticleSystem::EmitSmokeParticle(Particle& p) {
 //   z = speed * sin(phi) * sin(theta)
 // This converts a sphere's surface into x,y,z velocity directions.
 void ParticleSystem::EmitFireworkBurst(glm::vec3 origin) {
-	// Pick a random color theme for this particular burst
-	// All particles in one burst share the same base color (like real fireworks)
-	glm::vec3 burstColor;
-	int colorChoice = rand() % 5;
-	switch (colorChoice) {
-		case 0: burstColor = glm::vec3(1.0f, 0.2f, 0.2f); break; // Red
-		case 1: burstColor = glm::vec3(0.2f, 1.0f, 0.2f); break; // Green
-		case 2: burstColor = glm::vec3(0.3f, 0.3f, 1.0f); break; // Blue
-		case 3: burstColor = glm::vec3(1.0f, 1.0f, 0.2f); break; // Yellow
-		case 4: burstColor = glm::vec3(1.0f, 0.4f, 0.8f); break; // Pink
-	}
+	// Color palette: cycles through distinct colors in fixed order.
+	// No rand() involved — pure counter guarantees every color appears.
+	static const glm::vec3 colorPalette[] = {
+		glm::vec3(1.0f, 1.0f, 0.1f),   // 0: Yellow
+		glm::vec3(0.1f, 0.3f, 1.0f),   // 1: Blue
+		glm::vec3(1.0f, 0.4f, 0.0f),   // 2: Orange
+		glm::vec3(0.7f, 0.0f, 1.0f),   // 3: Purple
+		glm::vec3(1.0f, 0.9f, 0.2f),   // 4: Golden Yellow
+		glm::vec3(0.2f, 0.6f, 1.0f),   // 5: Sky Blue
+		glm::vec3(1.0f, 0.3f, 0.0f),   // 6: Deep Orange
+		glm::vec3(0.9f, 0.1f, 0.8f),   // 7: Magenta Purple
+	};
+	static const int NUM_COLORS = 8;
+	static int colorCounter = 0;
+
+	glm::vec3 burstColor = colorPalette[colorCounter % NUM_COLORS];
+	colorCounter++;
+
 
 	// Find inactive particles and turn them into burst particles
+	// 350 particles per burst creates a dense, realistic explosion
 	int burstCount = 0;
 	for (auto& p : particles_) {
-		if (!p.active && burstCount < 150) {
+		if (!p.active && burstCount < 350) {
 			// Spherical coordinates for uniform distribution
 			float theta = RandomFloat(0.0f, 2.0f * 3.14159f);  // horizontal angle
 			float phi = RandomFloat(0.0f, 3.14159f);            // vertical angle
-			float speed = RandomFloat(3.0f, 8.0f);              // explosion speed
+			float speed = RandomFloat(2.0f, 6.0f);              // tighter cluster for dense look
 
 			p.position = origin;  // all start at the explosion center
 
@@ -263,9 +270,9 @@ void ParticleSystem::EmitFireworkBurst(glm::vec3 origin) {
 			p.color = glm::clamp(p.color, 0.0f, 1.0f);
 
 			p.alpha = 1.0f;
-			p.life = RandomFloat(1.0f, 2.5f);
+			p.life = RandomFloat(2.0f, 3.5f);
 			p.maxLife = p.life;
-			p.size = RandomFloat(4.0f, 10.0f);
+			p.size = RandomFloat(10.0f, 22.0f);
 			p.active = true;
 			burstCount++;
 		}
@@ -295,23 +302,27 @@ void ParticleSystem::EmitParticle(Particle& p) {
 // ================================================================
 // TriggerFirework: Launch a new firework rocket
 // ================================================================
+// Launches a new rocket into the sky. Multiple rockets can be active
+// simultaneously, creating overlapping bursts for a richer display.
+//
 // A firework has two phases:
-//   Phase 1 (launch): A single invisible "rocket" flies upward.
-//                      Small trail particles are emitted behind it.
-//   Phase 2 (burst):  When the rocket slows down (near its peak),
+//   Phase 1 (launch): The rocket flies upward, leaving a trail.
+//   Phase 2 (burst):  When the rocket slows near its peak,
 //                      EmitFireworkBurst() creates the explosion.
 void ParticleSystem::TriggerFirework() {
-	fireworkLaunched_ = true;
-	fireworkExploded_ = false;
-	fireworkPos_ = emitterPos_;  // start from the ground
+	Rocket r;
+	r.position = emitterPos_;  // start from the ground
+	r.timer = 0.0f;
 
-	// Random upward velocity with slight horizontal angle
-	fireworkVel_ = glm::vec3(
-		RandomFloat(-1.0f, 1.0f),       // slight horizontal drift
-		RandomFloat(15.0f, 22.0f),      // strong upward launch
-		RandomFloat(-1.0f, 1.0f)        // slight horizontal drift
+	// Reduced upward velocity so the rocket peaks ON SCREEN
+	// Camera is at y=5 looking at y=3, so bursts around y=8-15 are visible
+	r.velocity = glm::vec3(
+		RandomFloat(-2.0f, 2.0f),       // horizontal spread for variety
+		RandomFloat(8.0f, 13.0f),       // moderate upward — peaks in view
+		RandomFloat(-2.0f, 2.0f)        // horizontal spread for variety
 	);
-	fireworkTimer_ = 0.0f;
+
+	activeRockets_.push_back(r);
 }
 
 
@@ -333,45 +344,48 @@ void ParticleSystem::Update(float deltaTime) {
 	glm::vec3 gravity(0.0f, -9.81f, 0.0f);
 
 	// ==========================================================
-	// FIREWORK LAUNCH PHASE
+	// FIREWORK LAUNCH PHASE (multiple simultaneous rockets)
 	// ==========================================================
-	// If a firework has been launched but hasn't exploded yet,
-	// move the invisible rocket upward and leave a trail.
-	if (effectType_ == EFFECT_FIREWORKS && fireworkLaunched_ && !fireworkExploded_) {
-		fireworkTimer_ += deltaTime;
+	// Each active rocket flies upward, leaves a trail, and explodes
+	// at its peak. Using a vector allows overlapping bursts.
+	if (effectType_ == EFFECT_FIREWORKS) {
+		for (int i = static_cast<int>(activeRockets_.size()) - 1; i >= 0; i--) {
+			Rocket& r = activeRockets_[i];
+			r.timer += deltaTime;
 
-		// Move the rocket: position += velocity * time
-		fireworkPos_ += fireworkVel_ * deltaTime;
+			// Move the rocket: position += velocity * time
+			r.position += r.velocity * deltaTime;
 
-		// Apply reduced gravity (rockets fight gravity on the way up)
-		fireworkVel_ += gravity * deltaTime * 0.3f;
+			// Apply reduced gravity (rockets fight gravity on the way up)
+			r.velocity += gravity * deltaTime * 0.3f;
 
-		// Emit a single trail particle each frame behind the rocket
-		for (auto& p : particles_) {
-			if (!p.active) {
-				p.position = fireworkPos_;
-				p.velocity = glm::vec3(
-					RandomFloat(-0.5f, 0.5f),    // slight spread
-					RandomFloat(-1.0f, 0.5f),    // mostly downward (trail falls behind)
-					RandomFloat(-0.5f, 0.5f)
-				);
-				p.color = glm::vec3(1.0f, 0.9f, 0.6f);  // bright yellowish trail
-				p.alpha = 0.8f;
-				p.life = 0.3f;     // trail particles die quickly
-				p.maxLife = 0.3f;
-				p.size = 4.0f;
-				p.active = true;
-				break;  // only one trail particle per frame
+			// Emit a trail particle behind the rocket each frame
+			for (auto& p : particles_) {
+				if (!p.active) {
+					p.position = r.position;
+					p.velocity = glm::vec3(
+						RandomFloat(-0.5f, 0.5f),    // slight spread
+						RandomFloat(-1.0f, 0.5f),    // mostly downward (trail falls behind)
+						RandomFloat(-0.5f, 0.5f)
+					);
+					p.color = glm::vec3(1.0f, 0.9f, 0.6f);  // bright yellowish trail
+					p.alpha = 0.8f;
+					p.life = 0.3f;     // trail particles die quickly
+					p.maxLife = 0.3f;
+					p.size = 4.0f;
+					p.active = true;
+					break;  // only one trail particle per rocket per frame
+				}
 			}
-		}
 
-		// Check if the rocket has reached its peak (velocity slowing down)
-		// or if it's been flying too long (safety timeout)
-		if (fireworkVel_.y <= 2.0f || fireworkTimer_ > 2.0f) {
-			// BOOM! Create the spherical burst at the rocket's position
-			EmitFireworkBurst(fireworkPos_);
-			fireworkExploded_ = true;
-			fireworkLaunched_ = false;
+			// Check if the rocket reached its peak or timed out
+			// Burst at velocity 3.0 or after 1.0s so explosion happens on screen
+			if (r.velocity.y <= 3.0f || r.timer > 1.0f) {
+				// BOOM! Create the spherical burst at the rocket's position
+				EmitFireworkBurst(r.position);
+				// Remove this rocket from the active list
+				activeRockets_.erase(activeRockets_.begin() + i);
+			}
 		}
 	}
 
@@ -401,16 +415,32 @@ void ParticleSystem::Update(float deltaTime) {
 	}
 
 	// ==========================================================
-	// AUTO-LAUNCH FIREWORKS
+	// AUTO-LAUNCH FIREWORKS (Assignment 4 inspired spawning)
 	// ==========================================================
-	// In fireworks mode, automatically launch a new firework every 1.5 seconds
-	// so the display keeps going without the user having to press F repeatedly.
-	if (effectType_ == EFFECT_FIREWORKS && !fireworkLaunched_) {
-		static float autoTimer = 0.0f;
-		autoTimer += deltaTime;
-		if (autoTimer > 1.5f) {
+	// Two-part logic ensures the sky always looks full:
+	//   1. Timed launches at random intervals (0.4–1.2s) for natural rhythm
+	//   2. Guarantee at least MIN_ACTIVE_BURSTS worth of particles visible
+	//      at all times — if the count drops, immediately launch more
+	if (effectType_ == EFFECT_FIREWORKS) {
+		// Count how many firework particles are currently alive
+		int activeFireworkParticles = 0;
+		for (const auto& p : particles_) {
+			if (p.active) activeFireworkParticles++;
+		}
+
+		// If too few particles on screen (bursts have faded), launch immediately
+		// Each burst creates ~150 particles, so MIN_ACTIVE_BURSTS * 150 = threshold
+		int minParticleThreshold = MIN_ACTIVE_BURSTS * 200;
+		if (activeFireworkParticles < minParticleThreshold && activeRockets_.size() < 3) {
 			TriggerFirework();
-			autoTimer = 0.0f;
+		}
+
+		// Also launch on a regular random timer for natural staggered rhythm
+		autoLaunchTimer_ += deltaTime;
+		float nextLaunch = 0.4f + static_cast<float>(rand() % 80) / 100.0f; // 0.4–1.2s
+		if (autoLaunchTimer_ > nextLaunch) {
+			TriggerFirework();
+			autoLaunchTimer_ = 0.0f;
 		}
 	}
 
@@ -465,15 +495,27 @@ void ParticleSystem::Update(float deltaTime) {
 			p.size += deltaTime * 5.0f;
 		}
 		// --- FIREWORK PHYSICS ---
+		// Inspired by Assignment 4's continuous expansion (norm * t * speed).
+		// Particles keep spreading outward while gravity pulls them into arcs.
 		else if (effectType_ == EFFECT_FIREWORKS) {
-			// Apply gravity so burst particles arc downward (realistic falling)
-			p.velocity += gravity * deltaTime * 0.5f;
+			// Gentle gravity so particles arc down realistically
+			p.velocity += gravity * deltaTime * 0.4f;
 
-			// Fade based on remaining life
+			// Gentle outward spread: particles expand slowly so the burst
+			// stays dense and visible rather than scattering immediately
+			float horizSpeed = sqrt(p.velocity.x * p.velocity.x + p.velocity.z * p.velocity.z);
+			if (horizSpeed > 0.1f) {
+				float invSpeed = 1.0f / horizSpeed;
+				float spreadForce = 0.8f * deltaTime;
+				p.velocity.x += (p.velocity.x * invSpeed) * spreadForce;
+				p.velocity.z += (p.velocity.z * invSpeed) * spreadForce;
+			}
+
+			// Linear fade — particles stay bright longer before fading out
 			p.alpha = lifeRatio;
 
-			// Very slow shrink
-			p.size *= 0.998f;
+			// Grow slightly over time (Assignment 4: size_factor = 1.0 + t * 0.3)
+			p.size += deltaTime * 2.0f;
 		}
 
 		// Move the particle: new_position = old_position + velocity * time
@@ -535,10 +577,19 @@ void ParticleSystem::Render(GLuint shader, glm::mat4 viewMatrix, glm::mat4 proje
 	loc = glGetUniformLocation(shader, "projection_mat");
 	glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(projectionMatrix));
 
-	// Step 4: Enable alpha blending so particles can be semi-transparent
-	// Standard blend: new_color = src_color * src_alpha + dst_color * (1 - src_alpha)
+	// Step 4: Enable blending — choose mode based on effect type
+	// Additive blending (GL_ONE) makes overlapping particles brighter, creating
+	// a natural glow effect perfect for fire and fireworks.
+	// Standard alpha blending is better for smoke, which should obscure what's behind it.
 	glEnable(GL_BLEND);
-	glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	if (effectType_ == EFFECT_SMOKE) {
+		// Standard alpha blend: smoke obscures the background
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+	} else {
+		// Additive blend for fire and fireworks: overlapping particles
+		// glow brighter, creating a dense luminous core at the burst center
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE);
+	}
 
 	// Don't write particles to the depth buffer
 	// This prevents particles from blocking each other — they should all be visible
@@ -578,10 +629,19 @@ void ParticleSystem::SetEffect(EffectType type) {
 		p.active = false;
 	}
 
-	// Reset firework state
-	fireworkLaunched_ = false;
-	fireworkExploded_ = false;
+	// Reset firework and emission state
+	activeRockets_.clear();
+	autoLaunchTimer_ = 0.0f;
+	activeBurstCount_ = 0;
 	emissionAccumulator_ = 0.0f;
+
+	// When switching to fireworks, immediately launch 3 staggered rockets
+	// so the sky fills up right away (inspired by Assignment 4's SetupScene)
+	if (type == EFFECT_FIREWORKS) {
+		for (int i = 0; i < MIN_ACTIVE_BURSTS; i++) {
+			TriggerFirework();
+		}
+	}
 }
 
 EffectType ParticleSystem::GetEffect() const {

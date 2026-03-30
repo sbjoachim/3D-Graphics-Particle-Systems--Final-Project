@@ -39,6 +39,7 @@ void main(void)
     // Soft glow: fully bright at center, fades at edges
     float glow = 1.0 - smoothstep(0.0, 0.5, dist);
 
-    // Output: full color at center, fades to transparent at edge
-    fragColor = vec4(vColor.rgb, glow);
+    // Output: keep full RGB color, only use glow for soft circular edges
+    // This ensures particle colors (blue, purple, etc.) stay vivid and visible
+    fragColor = vec4(vColor.rgb, vColor.a * glow);
 }

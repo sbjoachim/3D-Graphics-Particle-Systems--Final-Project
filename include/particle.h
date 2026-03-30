@@ -77,6 +77,7 @@ public:
 	void Update(float deltaTime);
 
 	// Called every frame to draw all active particles using the given shader
+	// Uses additive blending for fire/fireworks (glow) and standard alpha for smoke
 	void Render(GLuint shader, glm::mat4 viewMatrix, glm::mat4 projectionMatrix);
 
 	// Switch to a different effect (resets all particles)
@@ -105,11 +106,18 @@ private:
 	float emissionAccumulator_;       // Fractional particle counter (for smooth emission)
 
 	// ---- Firework rocket state ----
-	bool fireworkLaunched_;           // Is a rocket currently flying up?
-	glm::vec3 fireworkPos_;           // Current rocket position
-	glm::vec3 fireworkVel_;           // Current rocket velocity
-	float fireworkTimer_;             // Time since launch (safety timeout)
-	bool fireworkExploded_;           // Has the rocket exploded yet?
+	// Supports multiple simultaneous rockets for a richer fireworks display.
+	// Inspired by Assignment 4's spawning logic: ensures at least MIN_ACTIVE
+	// bursts are visible at all times so the sky never goes empty.
+	struct Rocket {
+		glm::vec3 position;           // Current rocket position in the sky
+		glm::vec3 velocity;           // Current rocket velocity (decays via gravity)
+		float timer;                  // Time since launch (safety timeout)
+	};
+	std::vector<Rocket> activeRockets_;  // All rockets currently in flight
+	float autoLaunchTimer_;              // Timer for automatic firework launches
+	int activeBurstCount_;               // Number of visible bursts (not yet fully faded)
+	static const int MIN_ACTIVE_BURSTS = 3; // Minimum bursts on screen at all times
 
 	// ---- OpenGL rendering resources ----
 	GLuint vao_;                      // Vertex Array Object (stores buffer layout)

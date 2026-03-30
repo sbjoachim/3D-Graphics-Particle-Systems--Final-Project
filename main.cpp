@@ -55,9 +55,49 @@ Author: Joachim Brian - 0686270
 #include <fstream>
 #include <sstream>
 #include <vector>
+#include <cstdlib>
+#include <ctime>
 
-// Path to the resource/ directory containing shaders and textures
-#define SHADER_DIRECTORY "C:/Users/Brian Joachim/Desktop/FinalProject 3D/finalproject/resource/"
+// Shader directory — resolved at runtime relative to the executable.
+// Falls back to an absolute path if relative resolution fails.
+// This allows the project to run from the build/ directory or
+// from the project root without manual path changes.
+std::string shaderDirectory;
+
+// Resolves the resource/ directory path relative to the executable location.
+// Checks two common layouts:
+//   1. exe is in build/Release/ -> resource/ is at ../../resource/
+//   2. exe is in build/         -> resource/ is at ../resource/
+std::string ResolveShaderDirectory(const std::string& exePath) {
+	// Extract directory from executable path
+	std::string dir = exePath;
+	size_t lastSlash = dir.find_last_of("/\\");
+	if (lastSlash != std::string::npos) {
+		dir = dir.substr(0, lastSlash + 1);
+	} else {
+		dir = "./";
+	}
+
+	// Try relative paths from the executable location
+	std::vector<std::string> candidates = {
+		dir + "../resource/",          // exe in build/Release/
+		dir + "../../resource/",       // exe in build/Release/ (deeper)
+		dir + "resource/",             // exe in project root
+		"resource/",                   // current working directory
+		"C:/Users/Brian Joachim/Desktop/FinalProject 3D/finalproject/resource/"  // absolute fallback
+	};
+
+	for (const auto& path : candidates) {
+		std::ifstream test(path + "particle.vert");
+		if (test.good()) {
+			test.close();
+			return path;
+		}
+	}
+
+	// Last resort: return the absolute path
+	return candidates.back();
+}
 
 // Macro for printing exceptions
 #define PrintException(exception_object)\
@@ -145,8 +185,8 @@ GLuint LoadShaders(std::string shaderName) {
 
 	GLuint vs = glCreateShader(GL_VERTEX_SHADER);
 
-	std::string fragment_shader = LoadTextFile(std::string(SHADER_DIRECTORY) + shaderName + ".frag");
-	std::string vertex_shader = LoadTextFile(std::string(SHADER_DIRECTORY) + shaderName + ".vert");
+	std::string fragment_shader = LoadTextFile(shaderDirectory + shaderName + ".frag");
+	std::string vertex_shader = LoadTextFile(shaderDirectory + shaderName + ".vert");
 
 	// Compile vertex shader
 	const char* const_vertex_shader = vertex_shader.c_str();
@@ -416,9 +456,14 @@ Geometry CreateGroundPlane(float size, int divisions) {
 // ================================================================
 // Main function
 // ================================================================
-int main(void) {
+int main(int argc, char* argv[]) {
 
 	try {
+		// Seed the random number generator so particle colors vary each run
+		srand(static_cast<unsigned int>(time(NULL)));
+
+		// Resolve shader directory relative to the executable location
+		shaderDirectory = ResolveShaderDirectory(argv[0]);
 		// Initialize GLFW
 		if (!glfwInit()) {
 			throw(std::runtime_error(std::string("Could not initialize the GLFW library")));
@@ -457,8 +502,8 @@ int main(void) {
 		// ----------------------------------------
 		camera = new Camera();
 		camera->SetCamera(
-			glm::vec3(0.0f, 5.0f, 20.0f),   // Position: slightly above and back
-			glm::vec3(0.0f, 3.0f, 0.0f),     // Look-at: slightly above origin
+			glm::vec3(0.0f, 3.0f, 25.0f),   // Position: pulled back to see more sky
+			glm::vec3(0.0f, 6.0f, 0.0f),     // Look-at: aimed higher to catch bursts
 			glm::vec3(0.0f, 1.0f, 0.0f)      // Up vector
 		);
 		camera->SetPerspectiveView(camera_fov_g, (float)window_width_g / (float)window_height_g,
