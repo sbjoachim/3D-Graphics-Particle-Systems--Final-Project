@@ -155,17 +155,28 @@ void ParticleSystem::EmitFireParticle(Particle& p) {
 		RandomFloat(-0.3f, 0.3f)       // slight front/back drift
 	);
 
-	// Color: fire ranges from bright yellow (center) to deep orange/red (edges)
-	// We randomize the green channel most — high green = yellow, low green = red
-	float r = RandomFloat(0.9f, 1.0f);   // red always high (fire is red-based)
-	float g = RandomFloat(0.3f, 0.7f);   // green varies: 0.7 = yellow, 0.3 = orange
-	float b = RandomFloat(0.0f, 0.1f);   // blue almost zero (fire isn't blue)
-	p.color = glm::vec3(r, g, b);
+	// Color: layered flame palette — occasional white-hot core particles
+	// near the emitter base, with orange/yellow mid-flame and deep red tips
+	float coreChance = RandomFloat(0.0f, 1.0f);
+	if (coreChance < 0.15f) {
+		// White-hot ember near the base (brightest part of the flame)
+		p.color = glm::vec3(1.0f, 0.92f, 0.7f);
+		p.size = RandomFloat(8.0f, 16.0f);
+		p.life = RandomFloat(0.3f, 0.7f);
+	} else if (coreChance < 0.5f) {
+		// Bright yellow-orange mid-flame
+		p.color = glm::vec3(1.0f, RandomFloat(0.55f, 0.75f), RandomFloat(0.0f, 0.08f));
+		p.size = RandomFloat(14.0f, 26.0f);
+		p.life = RandomFloat(0.5f, 1.2f);
+	} else {
+		// Deep orange to red outer flame
+		p.color = glm::vec3(RandomFloat(0.85f, 1.0f), RandomFloat(0.2f, 0.45f), RandomFloat(0.0f, 0.05f));
+		p.size = RandomFloat(16.0f, 32.0f);
+		p.life = RandomFloat(0.8f, 1.6f);
+	}
 
 	p.alpha = 1.0f;                        // fully opaque when born
-	p.life = RandomFloat(0.5f, 1.5f);     // dies after 0.5-1.5 seconds
 	p.maxLife = p.life;                    // remember original lifespan for fade calculation
-	p.size = RandomFloat(12.0f, 28.0f);   // slightly larger for fuller flames
 	p.active = true;                       // mark as alive
 }
 
@@ -194,14 +205,22 @@ void ParticleSystem::EmitSmokeParticle(Particle& p) {
 		RandomFloat(-0.5f, 0.5f)       // horizontal drift
 	);
 
-	// Gray tones: all RGB channels are the same value
-	float gray = RandomFloat(0.3f, 0.6f);
-	p.color = glm::vec3(gray, gray, gray);
+	// Warm-tinted smoke near the fire base, cooling to neutral gray as it rises
+	// Slight color variation prevents flat, uniform look
+	float gray = RandomFloat(0.25f, 0.55f);
+	float warmth = RandomFloat(0.0f, 1.0f);
+	if (warmth < 0.35f) {
+		// Warm brown-gray (near fire, recently heated)
+		p.color = glm::vec3(gray + 0.08f, gray + 0.03f, gray - 0.02f);
+	} else {
+		// Cool blue-gray (higher, cooled smoke)
+		p.color = glm::vec3(gray - 0.02f, gray, gray + 0.04f);
+	}
 
-	p.alpha = 0.6f;                        // semi-transparent from the start
+	p.alpha = RandomFloat(0.4f, 0.65f);   // varied transparency for depth
 	p.life = RandomFloat(2.0f, 4.0f);     // smoke lingers longer than fire
 	p.maxLife = p.life;
-	p.size = RandomFloat(20.0f, 45.0f);   // denser, larger smoke puffs
+	p.size = RandomFloat(22.0f, 50.0f);   // denser, larger smoke puffs
 	p.active = true;
 }
 
@@ -225,16 +244,18 @@ void ParticleSystem::EmitFireworkBurst(glm::vec3 origin) {
 	// Color palette: cycles through distinct colors in fixed order.
 	// No rand() involved — pure counter guarantees every color appears.
 	static const glm::vec3 colorPalette[] = {
-		glm::vec3(1.0f, 1.0f, 0.1f),   // 0: Yellow
-		glm::vec3(0.1f, 0.3f, 1.0f),   // 1: Blue
-		glm::vec3(1.0f, 0.4f, 0.0f),   // 2: Orange
-		glm::vec3(0.7f, 0.0f, 1.0f),   // 3: Purple
-		glm::vec3(1.0f, 0.9f, 0.2f),   // 4: Golden Yellow
-		glm::vec3(0.2f, 0.6f, 1.0f),   // 5: Sky Blue
-		glm::vec3(1.0f, 0.3f, 0.0f),   // 6: Deep Orange
-		glm::vec3(0.9f, 0.1f, 0.8f),   // 7: Magenta Purple
+		glm::vec3(1.0f, 0.95f, 0.15f),  // 0: Vivid Yellow
+		glm::vec3(0.15f, 0.35f, 1.0f),  // 1: Electric Blue
+		glm::vec3(1.0f, 0.45f, 0.05f),  // 2: Amber Orange
+		glm::vec3(0.75f, 0.05f, 1.0f),  // 3: Violet Purple
+		glm::vec3(1.0f, 0.85f, 0.25f),  // 4: Warm Gold
+		glm::vec3(0.1f, 0.8f, 0.95f),   // 5: Cyan
+		glm::vec3(1.0f, 0.15f, 0.3f),   // 6: Crimson Rose
+		glm::vec3(0.95f, 0.15f, 0.75f), // 7: Hot Pink
+		glm::vec3(0.3f, 1.0f, 0.4f),    // 8: Emerald Green
+		glm::vec3(1.0f, 0.7f, 0.1f),    // 9: Tangerine
 	};
-	static const int NUM_COLORS = 8;
+	static const int NUM_COLORS = 10;
 	static int colorCounter = 0;
 
 	glm::vec3 burstColor = colorPalette[colorCounter % NUM_COLORS];
@@ -270,9 +291,18 @@ void ParticleSystem::EmitFireworkBurst(glm::vec3 origin) {
 			p.color = glm::clamp(p.color, 0.0f, 1.0f);
 
 			p.alpha = 1.0f;
-			p.life = RandomFloat(2.0f, 3.5f);
+
+			// 12% of particles become glitter — tiny, bright, longer-lived sparkles
+			if (RandomFloat(0.0f, 1.0f) < 0.12f) {
+				p.color = glm::vec3(1.0f, 0.98f, 0.9f); // near-white glitter
+				p.life = RandomFloat(3.0f, 4.5f);
+				p.size = RandomFloat(3.0f, 7.0f);
+			} else {
+				p.life = RandomFloat(2.0f, 3.5f);
+				p.size = RandomFloat(10.0f, 22.0f);
+			}
+
 			p.maxLife = p.life;
-			p.size = RandomFloat(10.0f, 22.0f);
 			p.active = true;
 			burstCount++;
 		}
@@ -368,11 +398,11 @@ void ParticleSystem::Update(float deltaTime) {
 						RandomFloat(-1.0f, 0.5f),    // mostly downward (trail falls behind)
 						RandomFloat(-0.5f, 0.5f)
 					);
-					p.color = glm::vec3(1.0f, 0.9f, 0.6f);  // bright yellowish trail
-					p.alpha = 0.8f;
-					p.life = 0.3f;     // trail particles die quickly
-					p.maxLife = 0.3f;
-					p.size = 4.0f;
+					p.color = glm::vec3(1.0f, RandomFloat(0.8f, 0.95f), RandomFloat(0.4f, 0.65f));
+					p.alpha = RandomFloat(0.7f, 1.0f);
+					p.life = RandomFloat(0.2f, 0.45f);
+					p.maxLife = p.life;
+					p.size = RandomFloat(3.0f, 6.0f);
 					p.active = true;
 					break;  // only one trail particle per rocket per frame
 				}
@@ -576,6 +606,10 @@ void ParticleSystem::Render(GLuint shader, glm::mat4 viewMatrix, glm::mat4 proje
 
 	loc = glGetUniformLocation(shader, "projection_mat");
 	glUniformMatrix4fv(loc, 1, GL_FALSE, glm::value_ptr(projectionMatrix));
+
+	// Send effect type to the fragment shader for per-effect visual treatment
+	loc = glGetUniformLocation(shader, "effectType");
+	glUniform1i(loc, static_cast<int>(effectType_));
 
 	// Step 4: Enable blending — choose mode based on effect type
 	// Additive blending (GL_ONE) makes overlapping particles brighter, creating

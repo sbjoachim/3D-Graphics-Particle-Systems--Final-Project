@@ -384,9 +384,18 @@ Geometry CreateGroundPlane(float size, int divisions) {
 				0.0f,              // y = 0 (flat on the ground)
 				-size + z * step   // z coordinate
 			);
-			// Dark ground color with subtle variation
-			float shade = 0.05f + 0.03f * ((x + z) % 2); // checkerboard-like subtle pattern
-			v.color = glm::vec3(shade, shade + 0.02f, shade + 0.04f);
+			// Dark ground with subtle organic variation
+			// Distance from center affects base brightness
+			float cx = (-size + x * step);
+			float cz = (-size + z * step);
+			float cdist = sqrtf(cx * cx + cz * cz);
+			float nearCenter = 1.0f - std::min(cdist / size, 1.0f);
+			// Layered pattern: fine checker + coarser variation
+			float fine = 0.005f * ((x + z) % 2);
+			float coarse = 0.008f * ((x / 3 + z / 3) % 3);
+			float shade = 0.025f + fine + coarse + 0.02f * nearCenter;
+			// Cool blue-tinted dark surface
+			v.color = glm::vec3(shade * 0.85f, shade * 0.9f, shade * 1.1f);
 			// Normal points straight up
 			v.normal = glm::vec3(0.0f, 1.0f, 0.0f);
 			vertices.push_back(v);
@@ -450,6 +459,176 @@ Geometry CreateGroundPlane(float size, int divisions) {
 
 	glBindVertexArray(0);
 	return ground;
+}
+
+
+// ================================================================
+// CreateFirePit: Builds a 3D campfire pit (stone ring + logs)
+// ================================================================
+// Places a ring of stones and crossed logs at the origin so the
+// fire/smoke particles have a visible source object on the ground.
+
+// Helper: appends a box (rectangular prism) to the vertex/index arrays
+static void AddBox(std::vector<Vertex>& verts, std::vector<GLuint>& idx,
+	glm::vec3 center, glm::vec3 halfSize, glm::vec3 color)
+{
+	float x = halfSize.x, y = halfSize.y, z = halfSize.z;
+	glm::vec3 cx = center;
+
+	// 8 corner positions
+	glm::vec3 corners[8] = {
+		cx + glm::vec3(-x, -y, -z), cx + glm::vec3( x, -y, -z),
+		cx + glm::vec3( x,  y, -z), cx + glm::vec3(-x,  y, -z),
+		cx + glm::vec3(-x, -y,  z), cx + glm::vec3( x, -y,  z),
+		cx + glm::vec3( x,  y,  z), cx + glm::vec3(-x,  y,  z),
+	};
+
+	// 6 faces: each has 4 vertices with a face normal, forming 2 triangles
+	struct Face { int a, b, c, d; glm::vec3 n; };
+	Face faces[6] = {
+		{0,1,2,3, {0,0,-1}}, {5,4,7,6, {0,0,1}},  // front/back
+		{4,0,3,7, {-1,0,0}}, {1,5,6,2, {1,0,0}},  // left/right
+		{3,2,6,7, {0,1,0}},  {4,5,1,0, {0,-1,0}}, // top/bottom
+	};
+
+	for (int f = 0; f < 6; f++) {
+		GLuint base = (GLuint)verts.size();
+		int ids[4] = { faces[f].a, faces[f].b, faces[f].c, faces[f].d };
+		for (int i = 0; i < 4; i++) {
+			Vertex v;
+			v.pos = corners[ids[i]];
+			v.color = color;
+			v.normal = faces[f].n;
+			verts.push_back(v);
+		}
+		idx.push_back(base); idx.push_back(base+1); idx.push_back(base+2);
+		idx.push_back(base); idx.push_back(base+2); idx.push_back(base+3);
+	}
+}
+
+// Helper: appends a rotated box (rotated around Y axis) for log placement
+static void AddRotatedBox(std::vector<Vertex>& verts, std::vector<GLuint>& idx,
+	glm::vec3 center, glm::vec3 halfSize, glm::vec3 color, float angleY)
+{
+	float ca = cosf(angleY), sa = sinf(angleY);
+	float x = halfSize.x, y = halfSize.y, z = halfSize.z;
+
+	// 8 local corners, then rotate around Y and translate
+	glm::vec3 local[8] = {
+		{-x,-y,-z}, { x,-y,-z}, { x, y,-z}, {-x, y,-z},
+		{-x,-y, z}, { x,-y, z}, { x, y, z}, {-x, y, z},
+	};
+	glm::vec3 corners[8];
+	for (int i = 0; i < 8; i++) {
+		float rx = local[i].x * ca - local[i].z * sa;
+		float rz = local[i].x * sa + local[i].z * ca;
+		corners[i] = center + glm::vec3(rx, local[i].y, rz);
+	}
+
+	struct Face { int a, b, c, d; };
+	Face faces[6] = {
+		{0,1,2,3}, {5,4,7,6}, {4,0,3,7}, {1,5,6,2}, {3,2,6,7}, {4,5,1,0}
+	};
+
+	for (int f = 0; f < 6; f++) {
+		GLuint base = (GLuint)verts.size();
+		int ids[4] = { faces[f].a, faces[f].b, faces[f].c, faces[f].d };
+		// Compute face normal from first triangle
+		glm::vec3 e1 = corners[ids[1]] - corners[ids[0]];
+		glm::vec3 e2 = corners[ids[2]] - corners[ids[0]];
+		glm::vec3 n = glm::normalize(glm::cross(e1, e2));
+		for (int i = 0; i < 4; i++) {
+			Vertex v;
+			v.pos = corners[ids[i]];
+			v.color = color;
+			v.normal = n;
+			verts.push_back(v);
+		}
+		idx.push_back(base); idx.push_back(base+1); idx.push_back(base+2);
+		idx.push_back(base); idx.push_back(base+2); idx.push_back(base+3);
+	}
+}
+
+Geometry CreateFirePit() {
+	Geometry pit;
+	std::vector<Vertex> verts;
+	std::vector<GLuint> idx;
+
+	// --- Stone ring: 12 stones arranged in a circle ---
+	int numStones = 12;
+	float ringRadius = 1.4f;
+	for (int i = 0; i < numStones; i++) {
+		float angle = (float)i / (float)numStones * 2.0f * glm::pi<float>();
+		float cx = ringRadius * cosf(angle);
+		float cz = ringRadius * sinf(angle);
+		// Vary stone size slightly for a natural look
+		float sw = 0.25f + 0.08f * ((i % 3) - 1);  // width
+		float sh = 0.15f + 0.05f * ((i % 2));       // height
+		float sd = 0.2f  + 0.06f * ((i % 3) - 1);   // depth
+		// Stone color: cool gray with slight per-stone variation
+		float g = 0.22f + 0.05f * (i % 4);
+		float variation = 0.02f * ((i + 1) % 3);
+		glm::vec3 stoneColor(g - variation, g, g + variation * 0.5f);
+		// Rotate the stone to face outward from the ring center
+		AddRotatedBox(verts, idx,
+			glm::vec3(cx, sh, cz),
+			glm::vec3(sw, sh, sd),
+			stoneColor, angle);
+	}
+
+	// --- Logs: 3 crossed logs leaning toward center ---
+	glm::vec3 logColor(0.22f, 0.12f, 0.06f);     // dark brown
+	glm::vec3 logColorB(0.18f, 0.09f, 0.04f);    // slightly darker brown
+	glm::vec3 charColor(0.08f, 0.06f, 0.04f);    // charred ends
+
+	// Log dimensions: long and thin
+	glm::vec3 logHalf(0.12f, 0.10f, 0.7f);  // half-extents (thin, tall-ish, long)
+
+	// Place 3 logs at 60-degree intervals, tilted slightly upward at center
+	for (int i = 0; i < 3; i++) {
+		float angle = (float)i / 3.0f * glm::pi<float>(); // 0, 60, 120 degrees
+		float tilt = 0.15f; // slight upward lean toward center
+		glm::vec3 logCenter(0.0f, 0.22f + tilt, 0.0f);
+		glm::vec3 col = (i % 2 == 0) ? logColor : logColorB;
+		AddRotatedBox(verts, idx, logCenter, logHalf, col, angle);
+	}
+
+	// --- Charcoal/ember mound at center (small dark pile) ---
+	AddBox(verts, idx, glm::vec3(0.0f, 0.08f, 0.0f),
+		glm::vec3(0.35f, 0.08f, 0.35f), charColor);
+	// A couple of small ember chunks offset slightly
+	AddBox(verts, idx, glm::vec3(0.15f, 0.12f, 0.1f),
+		glm::vec3(0.12f, 0.07f, 0.1f), glm::vec3(0.12f, 0.05f, 0.02f));
+	AddBox(verts, idx, glm::vec3(-0.1f, 0.1f, -0.15f),
+		glm::vec3(0.1f, 0.06f, 0.12f), glm::vec3(0.10f, 0.04f, 0.02f));
+
+	// --- Upload to GPU ---
+	glGenVertexArrays(1, &pit.vao);
+	glBindVertexArray(pit.vao);
+
+	glGenBuffers(1, &pit.vbo);
+	glBindBuffer(GL_ARRAY_BUFFER, pit.vbo);
+	glBufferData(GL_ARRAY_BUFFER, verts.size() * sizeof(Vertex), verts.data(), GL_STATIC_DRAW);
+
+	glGenBuffers(1, &pit.ibo);
+	glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, pit.ibo);
+	glBufferData(GL_ELEMENT_ARRAY_BUFFER, idx.size() * sizeof(GLuint), idx.data(), GL_STATIC_DRAW);
+
+	GLint posAttrib = 0;
+	glEnableVertexAttribArray(posAttrib);
+	glVertexAttribPointer(posAttrib, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, pos));
+
+	GLint colAttrib = 1;
+	glEnableVertexAttribArray(colAttrib);
+	glVertexAttribPointer(colAttrib, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, color));
+
+	GLint normAttrib = 2;
+	glEnableVertexAttribArray(normAttrib);
+	glVertexAttribPointer(normAttrib, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)offsetof(Vertex, normal));
+
+	pit.size = (GLuint)idx.size();
+	glBindVertexArray(0);
+	return pit;
 }
 
 
@@ -518,11 +697,19 @@ int main(int argc, char* argv[]) {
 		// Load the ground shader (used for the ground plane with distance fade)
 		GLuint groundShader = LoadShaders("ground");
 
+		// Load the basic shader (used for solid 3D objects like the fire pit)
+		GLuint basicShader = LoadShaders("basic");
+
 		// ----------------------------------------
 		// Create ground plane geometry
 		// ----------------------------------------
 		// A 100x100 unit grid with 40 subdivisions, centered at the origin
 		Geometry groundPlane = CreateGroundPlane(50.0f, 40);
+
+		// ----------------------------------------
+		// Create fire pit (3D object at particle emitter origin)
+		// ----------------------------------------
+		Geometry firePit = CreateFirePit();
 
 		// ----------------------------------------
 		// Create particle system
@@ -604,6 +791,23 @@ int main(int argc, char* argv[]) {
 				glBindVertexArray(0);
 
 				glDisable(GL_BLEND);
+			}
+
+			// ============================================================
+			// STEP 2.5: Render the fire pit (solid 3D object at origin)
+			// ============================================================
+			{
+				glUseProgram(basicShader);
+
+				LoadShaderMatrix(basicShader, view_matrix, "view_mat");
+				LoadShaderMatrix(basicShader, projection_matrix, "projection_mat");
+
+				glm::mat4 pit_world = glm::mat4(1.0f);
+				LoadShaderMatrix(basicShader, pit_world, "world_mat");
+
+				glBindVertexArray(firePit.vao);
+				glDrawElements(GL_TRIANGLES, firePit.size, GL_UNSIGNED_INT, 0);
+				glBindVertexArray(0);
 			}
 
 			// ============================================================
